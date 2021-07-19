@@ -1,0 +1,11 @@
+[deps]
+AbstractFFTs = "621f4979-c628-5d54-868e-fcf4e3e8185c"
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+CUDAKernels = "72cfdca4-0801-4ab0-bf6a-d52aa10adc57"
+GPUArrays = "0c68f7d7-f131-5f86-a1c3-88cf8149b2d7"
+GPUCompiler = "61eb1bfa-7361-4325-ad38-22787b887f55"
+IJulia = "7073ff75-c697-5162-941a-fcdaad2a7d2a"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+LLVM = "929cbde3-209d-540e-8aea-75f648917ca0"
+Tullio = "bc48ee85-29a4-5162-ae0b-a64e1601d4bc"
