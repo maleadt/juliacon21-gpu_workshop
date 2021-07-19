@@ -4,24 +4,63 @@
 using Markdown
 using InteractiveUtils
 
-# ╔═╡ 3d20921a-e8a7-11eb-119c-f55d1a197148
+# This Pluto notebook uses @bind for interactivity. When running this notebook outside of Pluto, the following 'mock version' of @bind gives bound variables a default value (instead of an error).
+macro bind(def, element)
+    quote
+        local el = $(esc(element))
+        global $(esc(def)) = Core.applicable(Base.get, el) ? Base.get(el) : missing
+        el
+    end
+end
+
+# ╔═╡ 061460f5-22f1-40ff-8be1-a9fcfa7d4894
 begin
 	using Pkg
 	Pkg.activate(@__DIR__)
-	using AMDGPU
+	using PlutoUI
+end
+
+# ╔═╡ 13610da5-0b9f-4c86-a8a9-95a098d55294
+@bind GPU_PKG_NAME Select(["None", "CUDA", "AMDGPU", "oneAPI"])
+
+# ╔═╡ 3d20921a-e8a7-11eb-119c-f55d1a197148
+begin
+	using KernelAbstractions
+	if GPU_PKG_NAME == "CUDA"
+		using CUDA, CUDAKernels
+	elseif GPU_PKG_NAME == "AMDGPU"
+		ENV["JULIA_AMDGPU_DISABLE_ARTIFACTS"] = "1"
+		Pkg.build("AMDGPU")
+		using AMDGPU, ROCKernels
+	elseif GPU_PKG_NAME == "oneAPI"
+		using oneAPI
+	end
 	using ImageFiltering, ColorTypes, FixedPointNumbers, TensorCore
 	using FileIO, ImageMagick
 	using ImageShow
-	using PlutoUI
+	
 end
+
+# ╔═╡ d077f87a-45be-4114-921e-78378a07550a
+begin
+	GpuArray = if GPU_PKG_NAME == "CUDA"
+		CuArray
+	elseif GPU_PKG_NAME == "AMDGPU"
+		ROCArray
+	elseif GPU_PKG_NAME == "oneAPI"
+		ZeArray
+	else
+		Array
+	end
+end;
 
 # ╔═╡ ca1ff428-f3f9-490c-9da7-dcafef674782
 lilly = FileIO.load("Lilly_hat.jpg")
 
 # ╔═╡ 025a666c-d066-48d5-9788-9cb4e9634783
 begin
-	lilly_gpu = ROCArray(map(RGB{Float32}, lilly))
-	# Let's be careful not to try rendering a GPU array!
+	lilly_gpu = GpuArray(map(RGB{Float32}, lilly))
+	# Let's be careful to not render a GPU array! Scalar indexing is *slow*
 	Array(lilly_gpu)
 end
 
@@ -47,9 +86,10 @@ end
 md"Array operations work well for some things, but to get at more complicated operations, we sometimes need to write our operations as GPU kernels directly. Let's implement a basic translation:"
 
 # ╔═╡ 01b99862-652f-4235-88f3-040b9c734bb3
-function translate_kernel(out, inp, translation)
-    x_idx = (blockDim().x * (blockIdx().x - 1)) + threadIdx().x
-    y_idx = (blockDim().y * (blockIdx().y - 1)) + threadIdx().y
+@eval @kernel function translate_kernel(out, inp, translation)
+    #x_idx = (blockDim().x * (blockIdx().x - 1)) + threadIdx().x
+    #y_idx = (blockDim().y * (blockIdx().y - 1)) + threadIdx().y
+	x_idx, y_idx = @index(Global, NTuple)
 
     x_outidx = x_idx + translation[1]
     y_outidx = y_idx + translation[2]
@@ -58,19 +98,33 @@ function translate_kernel(out, inp, translation)
        (1 <= y_outidx <= size(out,2))
         out[x_outidx, y_outidx] = inp[x_idx, y_idx]
     end
-    return
 end
 
 # ╔═╡ aeb70d82-c647-43c6-918e-e50ea0bacf0c
-function exec_gpu(f, sz, args...)
-	wait(@roc groupsize=(32,32) gridsize=sz f(args...))
-end	
+begin
+	GpuBackend = if GPU_PKG_NAME == "CUDA"
+		#=function exec_gpu(f, sz, args...)
+			bsz = cld.(sz, 32)
+			eval(:CUDA).@sync @cuda threads=(32,32) blocks=bsz f(args...)
+		end=#
+		CuDevice()
+	elseif GPU_PKG_NAME == "AMDGPU"
+		#=function exec_gpu(f, sz, args...)
+			wait(@roc groupsize=(32,32) gridsize=sz f(args...))
+		end=#
+		ROCDevice()
+	elseif GPU_PKG_NAME == "oneAPI"
+		CPU()
+	else
+		CPU()
+	end
+end;
 
 # ╔═╡ a6d50928-c419-4599-92f5-51649c039e03
 begin
 	lilly_moved = similar(lilly_gpu)
 	lilly_moved .= RGB(0)
-	exec_gpu(translate_kernel, size(lilly_gpu), lilly_moved, lilly_gpu, (-500, 1000))
+	wait(translate_kernel(GpuBackend)(lilly_moved, lilly_gpu, (-500, 1000); ndrange=size(lilly_gpu), workgroupsize=(32,32)))
 	Array(lilly_moved)
 end
 
@@ -78,9 +132,8 @@ end
 md"Great, now let's do a scale operation:"
 
 # ╔═╡ bf12763b-d41f-467e-aa5e-80aa15202980
-function scale_kernel(out, inp, scale)
-    x_idx = (blockDim().x * (blockIdx().x - 1)) + threadIdx().x
-    y_idx = (blockDim().y * (blockIdx().y - 1)) + threadIdx().y
+@eval @kernel function scale_kernel(out, inp, scale)
+	x_idx, y_idx = @index(Global, NTuple)
 
     x_outidx = floor(Int, x_idx * scale[1])
     y_outidx = floor(Int, y_idx * scale[2])
@@ -89,14 +142,13 @@ function scale_kernel(out, inp, scale)
        (1 <= y_outidx <= size(out,2))
         out[x_outidx, y_outidx] = inp[x_idx, y_idx]
     end
-    return
 end
 
 # ╔═╡ dc2d6965-7766-4e12-a0a8-a263e81f19bd
 begin
 	lilly_scaled = similar(lilly_gpu)
 	lilly_scaled .= RGB(0)
-	exec_gpu(scale_kernel, size(lilly_gpu), lilly_scaled, lilly_gpu, (0.5, 0.2))
+	wait(scale_kernel(GpuBackend)(lilly_scaled, lilly_gpu, (0.5, 0.2); ndrange=size(lilly_gpu), workgroupsize=(32,32)))
 	Array(lilly_scaled)
 end
 
@@ -104,9 +156,8 @@ end
 md"Finally, let's rotate this puppy:"
 
 # ╔═╡ 11aa59de-5918-4043-a625-173b0c55fce3
-function rotate_kernel(out, inp, angle)
-    x_idx = (blockDim().x * (blockIdx().x - 1)) + threadIdx().x
-    y_idx = (blockDim().y * (blockIdx().y - 1)) + threadIdx().y
+@eval @kernel function rotate_kernel(out, inp, angle)
+    x_idx, y_idx = @index(Global, NTuple)
 
     x_centidx = x_idx - (size(inp,1)÷2)
     y_centidx = y_idx - (size(inp,2)÷2)
@@ -119,14 +170,13 @@ function rotate_kernel(out, inp, angle)
        (1 <= y_outidx <= size(out,2))
         out[x_outidx, y_outidx] = inp[x_idx, y_idx]
     end
-    return
 end
 
 # ╔═╡ 136196a6-e972-4f6b-95a5-faecd4214f73
 begin
 	lilly_rotated = similar(lilly_gpu)
 	lilly_rotated .= RGB(0)
-	exec_gpu(rotate_kernel, size(lilly_gpu), lilly_rotated, lilly_gpu, deg2rad(145))
+	wait(rotate_kernel(GpuBackend)(lilly_rotated, lilly_gpu, deg2rad(145); ndrange=size(lilly_gpu), workgroupsize=(32,32)))
 	Array(lilly_rotated)
 end
 
@@ -139,7 +189,7 @@ md"We can use ImageFiltering to generate the kernels for us on the CPU, and then
 # ╔═╡ 9b81e95c-6ffd-406b-8bf5-9c935f57a4e2
 begin
 	gaussian_k = Kernel.gaussian(15)
-	gaussian_kG = ROCArray(map(x->RGB{Float32}(Gray(x)), gaussian_k.parent))
+	gaussian_kG = GpuArray(map(x->RGB{Float32}(Gray(x)), gaussian_k.parent))
 	gaussian_offsets = abs.(gaussian_k.offsets) .- 1
 end;
 
@@ -147,9 +197,8 @@ end;
 md"And now we need to write out GPU kernel. We're going to implement a correlation (often incorrectly called a convolution) operation, which we can use to apply a filtering kernel to an input image:"
 
 # ╔═╡ 6f47a3f9-f836-485b-b5a2-ce44d0e4c216
-function corr_kernel(out, inp, kern, offsets)
-    x_idx = threadIdx().x + (blockDim().x * (blockIdx().x - 1))
-    y_idx = threadIdx().y + (blockDim().y * (blockIdx().y - 1))
+@eval @kernel function corr_kernel(out, inp, kern, offsets)
+    x_idx, y_idx = @index(Global, NTuple)
 
     out_T = eltype(out)
 
@@ -177,7 +226,7 @@ end
 # ╔═╡ e93d4dfb-5a28-4c15-abb7-e2980d143e1e
 begin
 	lilly_blurry = similar(lilly_gpu)
-	exec_gpu(corr_kernel, size(lilly_gpu), lilly_blurry, lilly_gpu, gaussian_kG, gaussian_offsets)
+	wait(corr_kernel(GpuBackend)(lilly_blurry, lilly_gpu, gaussian_kG, gaussian_offsets; ndrange=size(lilly_gpu), workgroupsize=(32,32)))
 	Array(lilly_blurry)
 end
 
@@ -187,18 +236,21 @@ md"There are plenty of interesting features in this image. Let's use a Sobel fil
 # ╔═╡ 00deb882-7fb3-4bfe-aad9-1131c9ef017b
 begin
 	sobel_k = Kernel.sobel()
-	sobel_kG = ROCArray(map(RGB{Float32}, sobel_k[1].parent))
+	sobel_kG = GpuArray(map(RGB{Float32}, sobel_k[1].parent))
 	sobel_offsets = abs.(sobel_k[1].offsets) .- 1
 
 	lilly_sobel = similar(lilly_gpu)
-	exec_gpu(corr_kernel, size(lilly_gpu), lilly_sobel, lilly_gpu, sobel_kG, sobel_offsets)
+	wait(corr_kernel(GpuBackend)(lilly_sobel, lilly_gpu, sobel_kG, sobel_offsets; ndrange=size(lilly_gpu), workgroupsize=(32,32)))
 	# Post-process the Sobel gradients into something comprehendable by humans
 	lilly_sobel = map(x->mapc(y->y > 0 ? 1.0 : 0.0, x), lilly_sobel)
 	Array(lilly_sobel)
 end
 
 # ╔═╡ Cell order:
+# ╠═061460f5-22f1-40ff-8be1-a9fcfa7d4894
+# ╠═13610da5-0b9f-4c86-a8a9-95a098d55294
 # ╠═3d20921a-e8a7-11eb-119c-f55d1a197148
+# ╠═d077f87a-45be-4114-921e-78378a07550a
 # ╠═ca1ff428-f3f9-490c-9da7-dcafef674782
 # ╠═025a666c-d066-48d5-9788-9cb4e9634783
 # ╟─1ba58648-2433-44ad-9d8f-e9269a383dc2
@@ -215,11 +267,11 @@ end
 # ╠═8730e4f8-ead5-4e88-9e5d-8e5cfe213eee
 # ╠═11aa59de-5918-4043-a625-173b0c55fce3
 # ╠═136196a6-e972-4f6b-95a5-faecd4214f73
-# ╠═b7174da1-b875-46f3-8e85-26e2e379a3a0
-# ╠═36dc1d4b-6299-4f68-8e1d-91d7f739308c
+# ╟─b7174da1-b875-46f3-8e85-26e2e379a3a0
+# ╟─36dc1d4b-6299-4f68-8e1d-91d7f739308c
 # ╠═9b81e95c-6ffd-406b-8bf5-9c935f57a4e2
-# ╠═646b1d7f-ad81-408f-958f-ed4c31cc4e61
+# ╟─646b1d7f-ad81-408f-958f-ed4c31cc4e61
 # ╠═6f47a3f9-f836-485b-b5a2-ce44d0e4c216
 # ╠═e93d4dfb-5a28-4c15-abb7-e2980d143e1e
-# ╠═593e5e91-f604-4420-9f38-772d51e8b0dc
+# ╟─593e5e91-f604-4420-9f38-772d51e8b0dc
 # ╠═00deb882-7fb3-4bfe-aad9-1131c9ef017b
