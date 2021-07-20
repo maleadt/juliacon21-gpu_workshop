@@ -7,7 +7,7 @@ if GPU_PKG_NAME == "CUDA"
     using CUDA, CUDAKernels
     const GPUMOD = CUDA
     const GpuArray = CuArray
-    const GpuBackend = CuDevice()
+    const GpuBackend = CUDADevice()
 elseif GPU_PKG_NAME == "AMDGPU"
     using AMDGPU, ROCKernels
     const GPUMOD = AMDGPU
