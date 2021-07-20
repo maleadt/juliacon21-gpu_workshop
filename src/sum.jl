@@ -1,21 +1,22 @@
 using CUDA
 
 function reduce_grid_atomic_shmem(op, a::AbstractArray{T}, b) where {T}
-    threads = blockDim().x
+    elements = blockDim().x*2
     thread = threadIdx().x
     block = blockIdx().x
-    offset = (block-1) * threads
+    offset = (block-1) * elements
 
     # shared mem to buffer memory loads
-    shared = @cuStaticSharedMem(T, (1024,))
+    shared = @cuStaticSharedMem(T, (2048,))
     @inbounds shared[thread] = a[offset+thread]
+    @inbounds shared[thread+blockDim().x] = a[offset+thread+blockDim().x]
 
     # parallel reduction of values in a block
     d = 1
-    while d < threads
+    while d < elements
         sync_threads()
         index = 2 * d * (thread-1) + 1
-        @inbounds if index <= threads
+        @inbounds if index <= elements && offset+index+d <= length(a)
             shared[index] = op(shared[index], shared[index+d])
         end
         d *= 2
@@ -36,7 +37,7 @@ function my_sum(a::AbstractArray{T}) where {T}
 
     config = launch_configuration(kernel.fun)
     threads = min(config.threads, length(a))
-    blocks = cld(length(a), threads)
+    blocks = cld(length(a), threads*2)
 
     @cuda threads=threads blocks=blocks reduce_grid_atomic_shmem(+, a, b)
 

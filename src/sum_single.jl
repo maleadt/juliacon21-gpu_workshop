@@ -44,24 +44,13 @@ NVTX.@range function my_sum(a::AbstractArray{T}) where {T}
     CUDA.@allowscalar b[]
 end
 
-NVTX.@range function my_multiple_sums(a::AbstractArray{T}) where {T}
-    n = size(a)[end]
-    dims = [axes(a)...][begin:end-1]
-    sums = Array{T}(undef, (fill(1, ndims(a)-1)..., n))
-    for x in 1:size(a,3)
-        y = view(a, dims..., x)
-        sums[x] = my_sum(y)
-    end
-    sums
-end
-
 function main()
-    a = CUDA.rand(1024, 1024, 10)
-    @assert my_multiple_sums(a) ≈ Array(sum(a; dims=(1,2)))
+    a = CUDA.rand(1024, 1024)
+    @assert my_sum(a) ≈ sum(a)
 
     CUDA.@profile begin
-        my_multiple_sums(a)
-        my_multiple_sums(a)
+        my_sum(a)
+        my_sum(a)
     end
 end
 

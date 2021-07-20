@@ -1,10 +1,10 @@
 using CUDA
 
 function reduce_grid_atomic_shmem(op, a::AbstractArray{T}, b) where {T}
-    elements = blockDim().x*2
-    thread = threadIdx().x
-    block = blockIdx().x
-    offset = (block-1) * elements
+    elements = Int32(blockDim().x) * Int32(2)
+    thread = Int32(threadIdx().x)
+    block = Int32(blockIdx().x)
+    offset = (block-Int32(1)) * elements
 
     # shared mem to buffer memory loads
     shared = @cuStaticSharedMem(T, (2048,))
@@ -12,14 +12,14 @@ function reduce_grid_atomic_shmem(op, a::AbstractArray{T}, b) where {T}
     @inbounds shared[thread+blockDim().x] = a[offset+thread+blockDim().x]
 
     # parallel reduction of values in a block
-    d = 1
+    d = Int32(1)
     while d < elements
         sync_threads()
-        index = 2 * d * (thread-1) + 1
+        index = Int32(2) * d * (thread-Int32(1)) + Int32(1)
         @inbounds if index <= elements && offset+index+d <= length(a)
             shared[index] = op(shared[index], shared[index+d])
         end
-        d *= 2
+        d *= Int32(2)
     end
 
     # atomic reduction
@@ -44,24 +44,13 @@ NVTX.@range function my_sum(a::AbstractArray{T}) where {T}
     CUDA.@allowscalar b[]
 end
 
-NVTX.@range function my_multiple_sums(a::AbstractArray{T}) where {T}
-    n = size(a)[end]
-    dims = [axes(a)...][begin:end-1]
-    sums = Array{T}(undef, (fill(1, ndims(a)-1)..., n))
-    for x in 1:size(a,3)
-        y = view(a, dims..., x)
-        sums[x] = my_sum(y)
-    end
-    sums
-end
-
 function main()
-    a = CUDA.rand(1024, 1024, 10)
-    @assert my_multiple_sums(a) ≈ Array(sum(a; dims=(1,2)))
+    a = CUDA.rand(1024, 1024)
+    @assert my_sum(a) ≈ sum(a)
 
     CUDA.@profile begin
-        my_multiple_sums(a)
-        my_multiple_sums(a)
+        my_sum(a)
+        my_sum(a)
     end
 end
 
