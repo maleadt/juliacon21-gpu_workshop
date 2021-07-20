@@ -20,4 +20,4 @@ const GpuArray = ZeArray
 const GpuBackend = CPU()
 end
 
-using Interact, ImageShow
+using ImageShow
