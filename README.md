@@ -1,7 +1,7 @@
 # JuliaCon 2021 - GPU Workshop material
 
 This repository contains the notebooks and other material for the
-[GPU workshop at JuliaCon 2021](https://www.youtube.com/watch?v=aKRv-W9Eg8g).
+[GPU workshop at JuliaCon 2021](https://youtu.be/Hz9IMJuW5hU).
 
 * `deep_dive`: a notebook that explains the different GPU programming models,
   array programming and kernel programming, and demonstrates what they can
